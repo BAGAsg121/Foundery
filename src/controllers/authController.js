@@ -2,6 +2,7 @@ import { getUserByEmail, createUser, getUserRoles, getUserPermissions, getAllUse
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { writePool } from '../lib/db.js';
+import { sendEmail } from '../services/emailService.js';
 
 // Generate JWT token
 const generateToken = (userId, roles) => {
@@ -56,12 +57,18 @@ export const signup = async (req, res) => {
     // Assign default 'user' role
     await assignDefaultRole(user.id);
 
-    // Mock Email Notification
-    console.log(`
-      📧 [MOCK EMAIL] To: shlok.goswami@eko.co.in
-      Subject: New User Signup Approval Needed
-      Body: User ${email} has signed up and is awaiting approval.
-    `);
+    // Send signup notification email
+    try {
+      await sendEmail({
+        to: process.env.ADMIN_EMAIL || 'shlok.goswami@eko.co.in',
+        subject: 'New User Signup Approval Needed',
+        text: `User ${email} has signed up and is awaiting approval.\n\nPlease log in to the admin dashboard to approve or reject this user.`,
+      });
+      console.log(`📧 Signup notification sent for ${email}`);
+    } catch (emailErr) {
+      console.error('⚠️  Could not send signup notification email:', emailErr.message);
+      // Don't fail signup just because email failed
+    }
 
     res.status(201).json({
       message: 'Account created. Verification pending. You will be notified once approved.',

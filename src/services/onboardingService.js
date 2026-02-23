@@ -197,8 +197,8 @@ export async function finalConfirmation(mobile, email, pan, confirm) {
         results.adminInfo = adminRows[0];
     }
 
-    // Step 3: SSH + Email (only if credentials are configured)
-    const hasEmailConfig = (process.env.SSH_HOST) && (process.env.SMTP_USER || process.env.GMAIL_CLIENT_ID);
+    // Step 3: Send agreement email (SSH is optional — only for file attachments)
+    const hasEmailConfig = !!(process.env.GMAIL_CLIENT_ID || process.env.SMTP_USER);
 
     if (hasEmailConfig) {
         try {
@@ -207,11 +207,11 @@ export async function finalConfirmation(mobile, email, pan, confirm) {
             results.message = 'Onboarding completed and agreement email sent.';
         } catch (err) {
             console.error('Email send error:', err.message);
-            results.message = 'Onboarding completed but email send failed.';
+            results.message = 'Onboarding completed but email send failed: ' + err.message;
         }
     } else {
-        results.message = 'Onboarding completed. Email/SSH not configured — skipping agreement email.';
-        console.warn('⚠️  SSH_HOST or Email config not found, skipping agreement email.');
+        results.message = 'Onboarding completed. No email config found (set GMAIL_CLIENT_ID or SMTP_USER).';
+        console.warn('⚠️  No email config found, skipping agreement email. Set GMAIL_CLIENT_ID or SMTP_USER.');
     }
 
     return results;
@@ -219,51 +219,57 @@ export async function finalConfirmation(mobile, email, pan, confirm) {
 
 // ─── Email Helper (Webhook4 sub-task) ────────────────────────────────────────
 async function sendAgreementEmail(cspcode, adminInfo) {
-    // Dynamic imports so the app doesn't fail if these packages aren't installed
-    let Client, nodemailer;
+    let nodemailer;
     try {
-        const ssh2Module = await import('ssh2');
-        Client = ssh2Module.Client;
         nodemailer = (await import('nodemailer')).default;
     } catch {
-        throw new Error('ssh2 or nodemailer packages not installed. Run: npm install ssh2 nodemailer');
+        throw new Error('nodemailer package not installed. Run: npm install nodemailer');
     }
 
     if (!cspcode || !adminInfo) {
         throw new Error('Missing cspcode or admin info for email');
     }
 
-    // SSH: Find and download agreement files
-    const files = await findAgreementFilesSSH(Client, cspcode);
+    // SSH: Find agreement files (optional — only if SSH credentials exist)
+    let files = [];
+    if (process.env.SSH_HOST) {
+        try {
+            const ssh2Module = await import('ssh2');
+            const Client = ssh2Module.Client;
+            files = await findAgreementFilesSSH(Client, cspcode);
+        } catch (err) {
+            console.warn('⚠️  SSH file retrieval failed (continuing without attachments):', err.message);
+        }
+    } else {
+        console.log('ℹ️  SSH_HOST not configured — sending agreement email without file attachments.');
+    }
 
     // Build email body
     const emailBody = `Hello Team,
 
-Please find attached the agreement for the new admin.
+Please find the onboarding details for the new admin.
 
 **Admin Name:** ${adminInfo.displayname || 'Unknown Admin'}
 **Org ID:** ${adminInfo.bcid || 'Unknown Org ID'}
 **Cell Number:** ${adminInfo.cellnumber || 'Unknown Cell Number'}
+**CSP Code:** ${cspcode}
 
 Best regards,
 Team Devops`;
 
-    // Send email
-    try {
-        const { sendEmail } = await import('./emailService.js');
-        await sendEmail({
-            to: process.env.AGREEMENT_EMAIL_TO || 'shrey.vats@eko.co.in',
-            subject: `New Admin onboarding details and Agreement code: ${cspcode}`,
-            text: emailBody,
+    // Send email using the centralized email service
+    const { sendEmail } = await import('./emailService.js');
+    await sendEmail({
+        to: process.env.AGREEMENT_EMAIL_TO || 'shrey.vats@eko.co.in',
+        subject: `New Admin onboarding details and Agreement code: ${cspcode}`,
+        text: emailBody,
+        ...(files.length > 0 && {
             attachments: files.map(f => ({
                 filename: f.name,
                 content: f.data,
             })),
-        });
-    } catch (err) {
-        // Fallback or rethrow depending on needs, maintaining existing behavior of throwing
-        throw err;
-    }
+        }),
+    });
 }
 
 // SSH: find agreement files on remote server
