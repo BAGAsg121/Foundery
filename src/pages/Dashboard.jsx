@@ -14,6 +14,7 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  console.log('Using API_URL:', API_URL);
 
   const fetchData = async () => {
     try {
@@ -27,14 +28,24 @@ export default function Dashboard() {
         axios.get(`${API_URL}/onboarding/admin/dashboard-stats`, { headers })
       ]);
 
+      // Check for errors in the individual requests
+      const errors = [subRes, usersRes, statsRes]
+        .filter(r => r.status === 'rejected')
+        .map(r => r.reason?.message || 'Unknown error');
+
+      if (errors.length > 0) {
+        console.error('Some requests failed:', errors);
+        setError(`Failed to load some data: ${errors.join(', ')}`);
+      }
+
       if (subRes.status === 'fulfilled') setSubmissions(subRes.value.data || []);
       if (usersRes.status === 'fulfilled') setPendingUsers(usersRes.value.data || []);
       if (statsRes.status === 'fulfilled') {
         setStats(statsRes.value.data || { funnel: { mobile_verified: 0, email_verified: 0, pan_verified: 0, final_confirmed: 0 } });
       }
     } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Failed to load data.');
+      console.error('Critical error fetching data:', err);
+      setError('A critical error occurred while loading data.');
       if (err.response?.status === 401) {
         handleLogout();
         navigate('/login');
